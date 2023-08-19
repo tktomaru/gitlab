@@ -1,19 +1,29 @@
 version: '3'
 services:
   gitlab:
+    # コンテナ名
     container_name: gitlab
     image: 'gitlab/gitlab-ce:16.2.3-ce.0'
     restart: always
     environment:
       GITLAB_OMNIBUS_CONFIG: |
-        external_url 'http://192.168.3.21:8929'
-        gitlab_rails['gitlab_shell_ssh_port'] = 2224
+        # 固定IP
+        external_url 'http://192.168.3.21:8900'
+        # ssh port変更
+        gitlab_rails['gitlab_shell_ssh_port'] = 8902
+        # http portデフォルト
         nginx['listen_port'] = 80
     ports:
+      # http port変更
       - '8900:80'
+      # https port変更
       - '8901:443'
+      # ssh port変更
       - '8902:22'
     volumes:
+      # etc保存
       - './data/gitlab/etc:/etc/gitlab'
+      # log保存
       - './data/gitlab/log:/var/log/gitlab'
+      # opt保存
       - './data/gitlab/opt:/var/opt/gitlab'
