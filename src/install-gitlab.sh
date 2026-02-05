@@ -8,6 +8,13 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# mkdir -p /etc/systemd/resolved.conf.d
+# tee /etc/systemd/resolved.conf.d/dns.conf <<EOF
+# [Resolve]
+# DNS=8.8.8.8 8.8.4.4
+# EOF
+# systemctl restart systemd-resolved
+
 ###############################################################################
 # Configuration Variables — Adjust these to match your environment
 ###############################################################################
@@ -54,6 +61,48 @@ check_root() {
         echo "ERROR: This script must be run as root (or with sudo)."
         exit 1
     fi
+}
+
+# Write a clean database.yml with only supported sections (main + ci).
+# The example file (database.yml.postgresql) ships with geo/embedding
+# sections that cause "unsupported database names" errors.
+# Call this before every rake task to guarantee correctness.
+write_database_yml() {
+    local target="${GITLAB_DIR}/config/database.yml"
+    rm -f "${target}"
+    cat > "${target}" <<DBYML
+production:
+  main:
+    adapter: postgresql
+    encoding: unicode
+    database: ${DB_NAME}
+    host: ${DB_HOST}
+    port: ${DB_PORT}
+    username: ${DB_USER}
+    password: "${DB_PASSWORD}"
+    prepared_statements: false
+  ci:
+    adapter: postgresql
+    encoding: unicode
+    database: ${DB_NAME}
+    host: ${DB_HOST}
+    port: ${DB_PORT}
+    username: ${DB_USER}
+    password: "${DB_PASSWORD}"
+    prepared_statements: false
+    database_tasks: false
+DBYML
+    chown git:git "${target}"
+    chmod 0600 "${target}"
+    echo "  -> database.yml written (main + ci only)"
+}
+
+# PATH that includes Go — used for all sudo -u git commands
+GIT_PATH="/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Run a command as the git user with the correct PATH
+run_git() {
+    sudo -u git -H env PATH="${GIT_PATH}" HOME="${GIT_HOME}" "$@"
 }
 
 ###############################################################################
@@ -144,6 +193,11 @@ fi
 export PATH="/usr/local/go/bin:${PATH}"
 echo 'export PATH="/usr/local/go/bin:${PATH}"' > /etc/profile.d/go.sh
 
+# Symlink go binaries into /usr/local/bin so that subprocesses
+# spawned by make/sh can find them without PATH manipulation
+ln -sf /usr/local/go/bin/go /usr/local/bin/go
+ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
 ###############################################################################
 log "Step 4/18: Installing Node.js ${NODE_MAJOR}.x and Yarn"
 ###############################################################################
@@ -166,6 +220,10 @@ if id git &>/dev/null; then
 else
     adduser --disabled-login --gecos 'GitLab' git
 fi
+
+# Ensure git user has Go/Node in PATH (sudo -u git -H resets PATH)
+sudo -u git -H bash -c 'grep -q "/usr/local/go/bin" ~/.profile 2>/dev/null || \
+    echo "export PATH=/usr/local/go/bin:/usr/local/bin:\$PATH" >> ~/.profile'
 
 ###############################################################################
 log "Step 6/18: Setting up PostgreSQL"
@@ -239,41 +297,8 @@ sudo -u git -H sed -i \
 sudo -u git -H cp config/secrets.yml.example config/secrets.yml
 sudo -u git -H chmod 0600 config/secrets.yml
 
-# --- database.yml (template rewrite — only main + ci, no geo/embedding) ---
-# IMPORTANT: The example file (database.yml.postgresql) contains unsupported
-# sections (geo, embedding). We must write a clean file with only main + ci.
-rm -f "${GITLAB_DIR}/config/database.yml"
-cat > "${GITLAB_DIR}/config/database.yml" <<DBEOF
-production:
-  main:
-    adapter: postgresql
-    encoding: unicode
-    database: ${DB_NAME}
-    host: ${DB_HOST}
-    port: ${DB_PORT}
-    username: ${DB_USER}
-    password: "${DB_PASSWORD}"
-    prepared_statements: false
-  ci:
-    adapter: postgresql
-    encoding: unicode
-    database: ${DB_NAME}
-    host: ${DB_HOST}
-    port: ${DB_PORT}
-    username: ${DB_USER}
-    password: "${DB_PASSWORD}"
-    prepared_statements: false
-    database_tasks: false
-DBEOF
-chown git:git "${GITLAB_DIR}/config/database.yml"
-chmod 0600 "${GITLAB_DIR}/config/database.yml"
-
-# Verify database.yml was written correctly
-if grep -q 'geo\|embedding' "${GITLAB_DIR}/config/database.yml"; then
-    echo "ERROR: database.yml still contains unsupported sections!"
-    exit 1
-fi
-echo "database.yml written successfully (main + ci only)."
+# --- database.yml ---
+write_database_yml
 
 # --- puma.rb ---
 sudo -u git -H cp config/puma.rb.example config/puma.rb
@@ -313,30 +338,33 @@ log "Step 10/18: Installing Ruby gems (bundle install)"
 ###############################################################################
 
 cd "${GITLAB_DIR}"
-sudo -u git -H bundle config set --local deployment 'true'
-sudo -u git -H bundle config set --local without 'development test kerberos'
-sudo -u git -H bundle install
+run_git bundle config set --local deployment 'true'
+run_git bundle config set --local without 'development test kerberos'
+run_git bundle install
 
 ###############################################################################
 log "Step 11/18: Installing GitLab Shell"
 ###############################################################################
 
 cd "${GITLAB_DIR}"
-sudo -u git -H bundle exec rake gitlab:shell:install RAILS_ENV=production
+write_database_yml
+run_git bundle exec rake gitlab:shell:install RAILS_ENV=production
 
 ###############################################################################
 log "Step 12/18: Installing GitLab Workhorse"
 ###############################################################################
 
 cd "${GITLAB_DIR}"
-sudo -u git -H bundle exec rake "gitlab:workhorse:install[${GIT_HOME}/gitlab-workhorse]" RAILS_ENV=production
+write_database_yml
+run_git bundle exec rake "gitlab:workhorse:install[${GIT_HOME}/gitlab-workhorse]" RAILS_ENV=production
 
 ###############################################################################
 log "Step 13/18: Installing Gitaly"
 ###############################################################################
 
 cd "${GITLAB_DIR}"
-sudo -u git -H bundle exec rake "gitlab:gitaly:install[${GIT_HOME}/gitaly,${GIT_HOME}/repositories]" RAILS_ENV=production
+write_database_yml
+run_git bundle exec rake "gitlab:gitaly:install[${GIT_HOME}/gitaly,${GIT_HOME}/repositories]" RAILS_ENV=production
 
 # Configure Gitaly
 cd "${GIT_HOME}/gitaly"
@@ -353,12 +381,13 @@ log "Step 14/18: Initializing database"
 ###############################################################################
 
 cd "${GITLAB_DIR}"
+write_database_yml
 
 # Start Gitaly temporarily for DB setup
-sudo -u git -H bash -c "cd ${GIT_HOME}/gitaly && ./run/gitaly &"
+sudo -u git -H bash -c "export PATH=${GIT_PATH}; cd ${GIT_HOME}/gitaly && ./_build/bin/gitaly ${GIT_HOME}/gitaly/config.toml &"
 sleep 5
 
-sudo -u git -H bash -c "cd ${GITLAB_DIR} && \
+sudo -u git -H bash -c "export PATH=${GIT_PATH}; cd ${GITLAB_DIR} && \
     echo 'yes' | bundle exec rake gitlab:setup RAILS_ENV=production \
     GITLAB_ROOT_PASSWORD='${GITLAB_ROOT_PASSWORD}' \
     GITLAB_ROOT_EMAIL='admin@local.host'"
@@ -372,8 +401,9 @@ log "Step 15/18: Compiling assets"
 ###############################################################################
 
 cd "${GITLAB_DIR}"
-sudo -u git -H yarn install --production --pure-lockfile
-sudo -u git -H bundle exec rake gitlab:assets:compile RAILS_ENV=production NODE_ENV=production
+write_database_yml
+run_git yarn install --production --pure-lockfile
+run_git bundle exec rake gitlab:assets:compile RAILS_ENV=production NODE_ENV=production
 
 ###############################################################################
 log "Step 16/18: Setting up systemd services"
@@ -522,8 +552,9 @@ systemctl start gitlab.target
 sleep 10
 
 cd "${GITLAB_DIR}"
-sudo -u git -H bundle exec rake gitlab:env:info RAILS_ENV=production
-sudo -u git -H bundle exec rake gitlab:check RAILS_ENV=production
+write_database_yml
+run_git bundle exec rake gitlab:env:info RAILS_ENV=production
+run_git bundle exec rake gitlab:check RAILS_ENV=production
 
 log "Installation complete!"
 echo ""
