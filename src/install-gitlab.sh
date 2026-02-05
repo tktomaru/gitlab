@@ -12,9 +12,9 @@ IFS=$'\n\t'
 # Configuration Variables — Adjust these to match your environment
 ###############################################################################
 GITLAB_BRANCH="18-8-stable"
-RUBY_VERSION="3.2.6"
-GO_VERSION="1.22.5"
-NODE_MAJOR=20
+RUBY_VERSION="3.2.10"
+GO_VERSION="1.25.7"
+NODE_MAJOR=22
 
 GITLAB_HOST="192.168.3.21"
 GITLAB_PORT="8900"
@@ -239,14 +239,31 @@ sudo -u git -H sed -i \
 sudo -u git -H cp config/secrets.yml.example config/secrets.yml
 sudo -u git -H chmod 0600 config/secrets.yml
 
-# --- database.yml ---
-sudo -u git -H cp config/database.yml.postgresql config/database.yml
-# For peer authentication (local PostgreSQL)
-sudo -u git -H sed -i \
-    -e "s|# host: localhost|host: ${DB_HOST}|" \
-    -e "s|gitlabhq_production|${DB_NAME}|" \
-    config/database.yml
-sudo -u git -H chmod 0600 config/database.yml
+# --- database.yml (template rewrite — only main + ci, no geo/embedding) ---
+cat > config/database.yml <<DBEOF
+production:
+  main:
+    adapter: postgresql
+    encoding: unicode
+    database: ${DB_NAME}
+    host: ${DB_HOST}
+    port: ${DB_PORT}
+    username: ${DB_USER}
+    password: "${DB_PASSWORD}"
+    prepared_statements: false
+  ci:
+    adapter: postgresql
+    encoding: unicode
+    database: ${DB_NAME}
+    host: ${DB_HOST}
+    port: ${DB_PORT}
+    username: ${DB_USER}
+    password: "${DB_PASSWORD}"
+    prepared_statements: false
+    database_tasks: false
+DBEOF
+chown git:git config/database.yml
+chmod 0600 config/database.yml
 
 # --- puma.rb ---
 sudo -u git -H cp config/puma.rb.example config/puma.rb
