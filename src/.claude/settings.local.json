@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(tree:*)",
+      "Bash(find:*)",
+      "Bash(sha256sum:*)",
+      "WebFetch(domain:docs.gitlab.com)",
+      "WebSearch",
+      "WebFetch(domain:gitlab.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.ruby-lang.org)",
+      "Bash(chmod:*)"
+    ]
+  }
+}

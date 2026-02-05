@@ -1,0 +1,107 @@
+version: "3.8"
+
+services:
+  # ===========================================================================
+  # GitLab CE (source build)
+  # ===========================================================================
+  gitlab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gitlab
+    hostname: gitlab
+    restart: unless-stopped
+    ports:
+      - "8900:80"
+      - "8901:443"
+      - "8902:22"
+    environment:
+      # GitLab core
+      GITLAB_HOST: "192.168.3.21"
+      GITLAB_PORT: "8900"
+      GITLAB_HTTPS: "false"
+      GITLAB_SSH_PORT: "8902"
+
+      # PostgreSQL
+      DB_ADAPTER: "postgresql"
+      DB_HOST: "postgresql"
+      DB_PORT: "5432"
+      DB_USER: "gitlab"
+      DB_PASS: "gitlab"
+      DB_NAME: "gitlabhq_production"
+
+      # Redis
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+
+      # Initial root password (change for production!)
+      GITLAB_ROOT_PASSWORD: "ChangeMe123!"
+      GITLAB_ROOT_EMAIL: "admin@local.host"
+
+      # Secrets — generate with: openssl rand -hex 64
+      # GITLAB_SECRETS_DB_KEY_BASE: ""
+      # GITLAB_SECRETS_SECRET_KEY_BASE: ""
+      # GITLAB_SECRETS_OTP_KEY_BASE: ""
+
+      # Puma tuning
+      PUMA_WORKERS: "2"
+      PUMA_MIN_THREADS: "1"
+      PUMA_MAX_THREADS: "4"
+    volumes:
+      - gitlab_repositories:/home/git/repositories
+      - gitlab_data:/home/git/data
+      - gitlab_shared:/home/git/gitlab/shared
+      - gitlab_uploads:/home/git/gitlab/public/uploads
+      - gitlab_logs:/home/git/gitlab/log
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    shm_size: "256m"
+
+  # ===========================================================================
+  # PostgreSQL 16
+  # ===========================================================================
+  postgresql:
+    image: postgres:16-bookworm
+    container_name: gitlab-postgresql
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "gitlab"
+      POSTGRES_PASSWORD: "gitlab"
+      POSTGRES_DB: "gitlabhq_production"
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init-postgres.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitlab -d gitlabhq_production"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ===========================================================================
+  # Redis 7
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: gitlab-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  gitlab_repositories:
+  gitlab_data:
+  gitlab_shared:
+  gitlab_uploads:
+  gitlab_logs:
+  postgresql_data:
+  redis_data:
