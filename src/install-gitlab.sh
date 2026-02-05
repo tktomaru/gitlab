@@ -21,9 +21,9 @@ IFS=$'\n\t'
 GITLAB_BRANCH="18-8-stable"
 RUBY_VERSION="3.2.10"
 GO_VERSION="1.25.7"
-NODE_MAJOR=22
+NODE_MAJOR=20
 
-GITLAB_HOST="192.168.3.21"
+GITLAB_HOST="10.0.2.15"
 GITLAB_PORT="8900"
 GITLAB_HTTPS="false"
 EXTERNAL_URL="http://${GITLAB_HOST}:${GITLAB_PORT}"
@@ -76,19 +76,19 @@ production:
     adapter: postgresql
     encoding: unicode
     database: ${DB_NAME}
-    host: ${DB_HOST}
-    port: ${DB_PORT}
-    username: ${DB_USER}
-    password: "${DB_PASSWORD}"
+    # host: ${DB_HOST}
+    # port: ${DB_PORT}
+    # username: ${DB_USER}
+    # password: "${DB_PASSWORD}"
     prepared_statements: false
   ci:
     adapter: postgresql
     encoding: unicode
     database: ${DB_NAME}
-    host: ${DB_HOST}
-    port: ${DB_PORT}
-    username: ${DB_USER}
-    password: "${DB_PASSWORD}"
+    # host: ${DB_HOST}
+    # port: ${DB_PORT}
+    # username: ${DB_USER}
+    # password: "${DB_PASSWORD}"
     prepared_statements: false
     database_tasks: false
 DBYML
@@ -283,6 +283,10 @@ cd "${GITLAB_DIR}"
 log "Step 9/18: Configuring GitLab"
 ###############################################################################
 
+sudo -u git -H mkdir -p tmp/sockets/private
+sudo -u git -H chmod 0700 tmp/sockets/private
+sudo -u git -H chown -R git:git tmp/sockets/private
+
 # --- gitlab.yml ---
 sudo -u git -H cp config/gitlab.yml.example config/gitlab.yml
 sudo -u git -H sed -i \
@@ -384,8 +388,9 @@ cd "${GITLAB_DIR}"
 write_database_yml
 
 # Start Gitaly temporarily for DB setup
-sudo -u git -H bash -c "export PATH=${GIT_PATH}; cd ${GIT_HOME}/gitaly && ./_build/bin/gitaly ${GIT_HOME}/gitaly/config.toml &"
-sleep 5
+sudo -u git -H bash -c "export PATH=${GIT_PATH}; cd ${GIT_HOME}/gitaly && ./_build/bin/gitaly ${GIT_HOME}/gitaly/config.toml >> ${GITLAB_DIR}/log/gitaly.log 2>&1 &"
+# Wait for socket
+timeout 30 bash -c 'until [ -S /home/git/gitlab/tmp/sockets/private/gitaly.socket ]; do sleep 1; done'
 
 sudo -u git -H bash -c "export PATH=${GIT_PATH}; cd ${GITLAB_DIR} && \
     echo 'yes' | bundle exec rake gitlab:setup RAILS_ENV=production \
@@ -403,7 +408,9 @@ log "Step 15/18: Compiling assets"
 cd "${GITLAB_DIR}"
 write_database_yml
 run_git yarn install --production --pure-lockfile
-run_git bundle exec rake gitlab:assets:compile RAILS_ENV=production NODE_ENV=production
+# Increase Node.js memory limit for asset compilation
+sudo -u git -H env PATH="${GIT_PATH}" HOME="${GIT_HOME}" NODE_OPTIONS="--max_old_space_size=4096" \
+    bundle exec rake gitlab:assets:compile RAILS_ENV=production NODE_ENV=production
 
 ###############################################################################
 log "Step 16/18: Setting up systemd services"
