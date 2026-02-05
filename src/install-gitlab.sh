@@ -240,7 +240,10 @@ sudo -u git -H cp config/secrets.yml.example config/secrets.yml
 sudo -u git -H chmod 0600 config/secrets.yml
 
 # --- database.yml (template rewrite — only main + ci, no geo/embedding) ---
-cat > config/database.yml <<DBEOF
+# IMPORTANT: The example file (database.yml.postgresql) contains unsupported
+# sections (geo, embedding). We must write a clean file with only main + ci.
+rm -f "${GITLAB_DIR}/config/database.yml"
+cat > "${GITLAB_DIR}/config/database.yml" <<DBEOF
 production:
   main:
     adapter: postgresql
@@ -262,8 +265,15 @@ production:
     prepared_statements: false
     database_tasks: false
 DBEOF
-chown git:git config/database.yml
-chmod 0600 config/database.yml
+chown git:git "${GITLAB_DIR}/config/database.yml"
+chmod 0600 "${GITLAB_DIR}/config/database.yml"
+
+# Verify database.yml was written correctly
+if grep -q 'geo\|embedding' "${GITLAB_DIR}/config/database.yml"; then
+    echo "ERROR: database.yml still contains unsupported sections!"
+    exit 1
+fi
+echo "database.yml written successfully (main + ci only)."
 
 # --- puma.rb ---
 sudo -u git -H cp config/puma.rb.example config/puma.rb
